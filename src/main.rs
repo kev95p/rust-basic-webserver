@@ -1,5 +1,6 @@
 pub mod request;
 
+use anyhow::{anyhow, Context, Result};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -10,8 +11,10 @@ use crate::request::Request;
 const MAX_REQUEST_SIZE: usize = 8 * 1024;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let tcp_listener = TcpListener::bind("0.0.0.0:8080").await?;
+async fn main() -> Result<()> {
+    let tcp_listener = TcpListener::bind("0.0.0.0:8080")
+        .await
+        .context("fallo al vincular servidor TCP")?;
     println!("Servidor escuchando en 0.0.0.0:8080");
 
     loop {
@@ -24,7 +27,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
 }
 
-async fn handle_connection(socket: &mut TcpStream) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+async fn handle_connection(socket: &mut TcpStream) -> Result<()> {
     let request_bytes = read_request(socket).await?;
     let request = match Request::new(&request_bytes) {
         Ok(req) => req,
@@ -34,7 +37,10 @@ async fn handle_connection(socket: &mut TcpStream) -> Result<(), Box<dyn std::er
                 Content-Length: 0\r\n\
                 Connection: close\r\n\
                 \r\n";
-            socket.write_all(response.as_bytes()).await?;
+            socket
+                .write_all(response.as_bytes())
+                .await
+                .context("fallo al escribir respuesta 400")?;
             return Ok(());
         }
     };
@@ -57,22 +63,27 @@ async fn handle_connection(socket: &mut TcpStream) -> Result<(), Box<dyn std::er
         html
     );
 
-    socket.write_all(response.as_bytes()).await?;
+    socket
+        .write_all(response.as_bytes())
+        .await
+        .context("fallo al escribir respuesta 200")?;
     Ok(())
 }
 
-async fn read_request(socket: &mut TcpStream) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
+async fn read_request(socket: &mut TcpStream) -> Result<Vec<u8>> {
     let mut buffer = Vec::new();
     let mut temp = [0u8; 1024];
 
     loop {
         let n = socket.read(&mut temp).await?;
         if n == 0 {
-            return Err("Cliente cerró la conexión antes de enviar una petición completa".into());
+            return Err(anyhow!(
+                "Cliente cerró la conexión antes de enviar una petición completa"
+            ));
         }
 
         if buffer.len() + n > MAX_REQUEST_SIZE {
-            return Err("Petición demasiado grande".into());
+            return Err(anyhow!("Petición demasiado grande"));
         }
 
         buffer.extend_from_slice(&temp[..n]);

@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use anyhow::{anyhow, Result};
+
 #[derive(Debug)]
 pub struct Request {
     method: String,
@@ -10,10 +12,10 @@ pub struct Request {
 }
 
 impl Request {
-    pub fn new(request_payload: &[u8]) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+    pub fn new(request_payload: &[u8]) -> Result<Self> {
         let mut parsed_request = Request::parse_payload(request_payload)?;
         if parsed_request.is_empty() {
-            return Err("petición vacía".into());
+            return Err(anyhow!("petición vacía"));
         }
         let first = parsed_request.remove(0);
         let (method, path, query, version) = Request::extract_request_line(&first)?;
@@ -27,7 +29,7 @@ impl Request {
         })
     }
 
-    fn parse_payload(request_payload: &[u8]) -> Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>> {
+    fn parse_payload(request_payload: &[u8]) -> Result<Vec<String>> {
         let parsed_request = String::from_utf8(request_payload.to_vec())?;
         Ok(parsed_request
             .split("\r\n")
@@ -38,13 +40,13 @@ impl Request {
 
     fn extract_request_line(
         payload: &str,
-    ) -> Result<(&str, &str, Option<&str>, &str), Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<(&str, &str, Option<&str>, &str)> {
         let mut parts = payload.split_whitespace();
-        let method = parts.next().ok_or("falta method")?;
-        let target = parts.next().ok_or("falta path")?;
-        let version = parts.next().ok_or("falta version")?;
+        let method = parts.next().ok_or_else(|| anyhow!("falta method"))?;
+        let target = parts.next().ok_or_else(|| anyhow!("falta path"))?;
+        let version = parts.next().ok_or_else(|| anyhow!("falta version"))?;
         if parts.next().is_some() {
-            return Err("línea de solicitud con demasiados elementos".into());
+            return Err(anyhow!("línea de solicitud con demasiados elementos"));
         }
 
         let (path, query) = match target.split_once('?') {
@@ -58,12 +60,12 @@ impl Request {
 
     fn extract_headers(
         payload: &[String],
-    ) -> Result<HashMap<String, String>, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<HashMap<String, String>> {
         let mut headers = HashMap::new();
         for line in payload {
             let (key, value) = line
                 .split_once(':')
-                .ok_or_else(|| format!("header inválido: {}", line))?;
+                .ok_or_else(|| anyhow!("header inválido: {}", line))?;
             headers.insert(key.trim().to_string(), value.trim().to_string());
         }
         Ok(headers)
