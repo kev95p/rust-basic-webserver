@@ -18,6 +18,7 @@ pub enum Method {
 pub struct Request {
     method: String,
     path: String,
+    #[allow(dead_code)]
     query: Option<String>,
     version: String,
     headers: HashMap<String, String>,
@@ -56,14 +57,6 @@ impl Request {
 
     pub fn path(&self) -> &str {
         &self.path
-    }
-
-    pub fn query(&self) -> Option<&str> {
-        self.query.as_deref()
-    }
-
-    pub fn version(&self) -> &str {
-        &self.version
     }
 
     pub fn wants_keep_alive(&self) -> bool {

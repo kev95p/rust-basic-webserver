@@ -99,3 +99,77 @@ impl Response {
         response
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_response_to_http_bytes() {
+        let response = Response::ok("<h1>Hola</h1>");
+        let bytes = response.to_http_bytes("close", None);
+        let text = String::from_utf8(bytes).unwrap();
+
+        assert!(text.starts_with("HTTP/1.1 200 OK\r\n"));
+        assert!(text.contains("Content-Type: text/html; charset=utf-8\r\n"));
+        assert!(text.contains("Content-Length: 13\r\n"));
+        assert!(text.contains("Connection: close\r\n"));
+        assert!(!text.contains("Content-Encoding:"));
+        assert!(text.ends_with("<h1>Hola</h1>"));
+    }
+
+    #[test]
+    fn test_response_to_http_bytes_keep_alive() {
+        let response = Response::ok("<h1>Hola</h1>");
+        let bytes = response.to_http_bytes("keep-alive", None);
+        let text = String::from_utf8(bytes).unwrap();
+
+        assert!(text.contains("Connection: keep-alive\r\n"));
+    }
+
+    #[test]
+    fn test_response_to_http_bytes_gzip() {
+        use flate2::read::GzDecoder;
+        use std::io::Read;
+
+        let response = Response::ok("<h1>Hola</h1>");
+        let bytes = response.to_http_bytes("close", Some("gzip"));
+        let text = String::from_utf8_lossy(&bytes);
+
+        assert!(text.contains("HTTP/1.1 200 OK\r\n"));
+        assert!(text.contains("Content-Encoding: gzip\r\n"));
+        assert!(text.contains("Connection: close\r\n"));
+
+        // Separar headers del cuerpo comprimido.
+        let separator = b"\r\n\r\n";
+        let body_start = bytes
+            .windows(separator.len())
+            .position(|window| window == separator)
+            .unwrap()
+            + separator.len();
+        let compressed = &bytes[body_start..];
+
+        let mut decoder = GzDecoder::new(compressed);
+        let mut decoded = String::new();
+        decoder.read_to_string(&mut decoded).unwrap();
+        assert_eq!(decoded, "<h1>Hola</h1>");
+    }
+
+    #[test]
+    fn test_not_found_response() {
+        let response = Response::not_found();
+        assert_eq!(response.status, 404);
+        let bytes = response.to_http_bytes("close", None);
+        let text = String::from_utf8(bytes).unwrap();
+        assert!(text.starts_with("HTTP/1.1 404 Not Found\r\n"));
+    }
+
+    #[test]
+    fn test_method_not_allowed_response() {
+        let response = Response::method_not_allowed();
+        assert_eq!(response.status, 405);
+        let bytes = response.to_http_bytes("close", None);
+        let text = String::from_utf8(bytes).unwrap();
+        assert!(text.starts_with("HTTP/1.1 405 Method Not Allowed\r\n"));
+    }
+}
