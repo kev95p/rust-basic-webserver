@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Servidor Rust</title>
+    <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+    <header class="site-header">
+        <nav class="navbar">
+            <div class="brand">RustServer</div>
+            <ul class="nav-links">
+                <li><a href="/">Inicio</a></li>
+                <li><a href="/index.html">Página estática</a></li>
+                <li><a href="/home">Home dinámico</a></li>
+            </ul>
+        </nav>
+    </header>
+
+    <main class="container">
+        <section class="hero">
+            <h1>Servidor HTTP en Rust</h1>
+            <p class="lead">
+                Esta página es servida como un archivo estático desde el directorio
+                <code>public/</code>.
+            </p>
+            <button id="action-button" class="btn-primary">Haz clic aquí</button>
+            <p id="message" class="message hidden"></p>
+        </section>
+
+        <section class="features">
+            <article class="card">
+                <h2>Keep-alive</h2>
+                <p>El servidor reutiliza conexiones TCP cuando el navegador lo solicita.</p>
+            </article>
+            <article class="card">
+                <h2>Gzip</h2>
+                <p>Las respuestas se comprimen si el cliente acepta codificación gzip.</p>
+            </article>
+            <article class="card">
+                <h2>Seguridad básica</h2>
+                <p>Se bloquean intentos de path traversal hacia directorios superiores.</p>
+            </article>
+        </section>
+    </main>
+
+    <footer class="site-footer">
+        <p>Construido con Rust y Tokio.</p>
+    </footer>
+
+    <script src="/app.js"></script>
+</body>
+</html>

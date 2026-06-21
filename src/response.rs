@@ -1,39 +1,49 @@
+use std::borrow::Cow;
+
 pub struct Response {
     pub status: u16,
-    pub content_type: &'static str,
-    pub body: String,
+    pub content_type: Cow<'static, str>,
+    pub body: Vec<u8>,
 }
 
 impl Response {
     pub fn ok(body: impl Into<String>) -> Self {
         Self {
             status: 200,
-            content_type: "text/html; charset=utf-8",
-            body: body.into(),
+            content_type: Cow::Borrowed("text/html; charset=utf-8"),
+            body: body.into().into_bytes(),
         }
     }
 
     pub fn not_found() -> Self {
         Self {
             status: 404,
-            content_type: "text/plain; charset=utf-8",
-            body: "404 Not Found".to_string(),
+            content_type: Cow::Borrowed("text/plain; charset=utf-8"),
+            body: b"404 Not Found".to_vec(),
         }
     }
 
     pub fn method_not_allowed() -> Self {
         Self {
             status: 405,
-            content_type: "text/plain; charset=utf-8",
-            body: "405 Method Not Allowed".to_string(),
+            content_type: Cow::Borrowed("text/plain; charset=utf-8"),
+            body: b"405 Method Not Allowed".to_vec(),
         }
     }
 
     pub fn bad_request() -> Self {
         Self {
             status: 400,
-            content_type: "text/plain; charset=utf-8",
-            body: "400 Bad Request".to_string(),
+            content_type: Cow::Borrowed("text/plain; charset=utf-8"),
+            body: b"400 Bad Request".to_vec(),
+        }
+    }
+
+    pub fn static_file(content_type: impl Into<Cow<'static, str>>, body: Vec<u8>) -> Self {
+        Self {
+            status: 200,
+            content_type: content_type.into(),
+            body,
         }
     }
 
@@ -56,14 +66,14 @@ impl Response {
 
                 let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
                 encoder
-                    .write_all(self.body.as_bytes())
+                    .write_all(&self.body)
                     .expect("fallo al escribir en el compresor gzip");
                 let compressed = encoder
                     .finish()
                     .expect("fallo al finalizar la compresión gzip");
                 (compressed, Some("gzip"))
             }
-            _ => (self.body.clone().into_bytes(), None),
+            _ => (self.body.clone(), None),
         };
 
         let mut headers = format!(
