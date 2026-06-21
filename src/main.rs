@@ -10,7 +10,7 @@ use crate::request::Request;
 const MAX_REQUEST_SIZE: usize = 8 * 1024;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let tcp_listener = TcpListener::bind("0.0.0.0:8080").await?;
     println!("Servidor escuchando en 0.0.0.0:8080");
 
@@ -24,9 +24,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
-async fn handle_connection(socket: &mut TcpStream) -> Result<(), Box<dyn std::error::Error>> {
+async fn handle_connection(socket: &mut TcpStream) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let request_bytes = read_request(socket).await?;
-    let request = Request::new(&request_bytes)?;
+    let request = match Request::new(&request_bytes) {
+        Ok(req) => req,
+        Err(e) => {
+            eprintln!("Petición malformada: {}", e);
+            let response = "HTTP/1.1 400 Bad Request\r\n\
+                Content-Length: 0\r\n\
+                Connection: close\r\n\
+                \r\n";
+            socket.write_all(response.as_bytes()).await?;
+            return Ok(());
+        }
+    };
     println!("{:?}", request);
 
     let html = r#"<!DOCTYPE html>
@@ -50,7 +61,7 @@ async fn handle_connection(socket: &mut TcpStream) -> Result<(), Box<dyn std::er
     Ok(())
 }
 
-async fn read_request(socket: &mut TcpStream) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+async fn read_request(socket: &mut TcpStream) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
     let mut buffer = Vec::new();
     let mut temp = [0u8; 1024];
 
