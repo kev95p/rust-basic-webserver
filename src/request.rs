@@ -77,6 +77,17 @@ impl Request {
         }
     }
 
+    pub fn accepts_encoding(&self, encoding: &str) -> bool {
+        self.headers
+            .get("Accept-Encoding")
+            .map(|value| {
+                value
+                    .split(',')
+                    .any(|part| part.trim().eq_ignore_ascii_case(encoding))
+            })
+            .unwrap_or(false)
+    }
+
     fn parse_payload(request_payload: &[u8]) -> Result<Vec<String>> {
         let parsed_request = String::from_utf8(request_payload.to_vec())?;
         Ok(parsed_request
@@ -229,6 +240,22 @@ mod tests {
             "GET / HTTP/1.0\r\nHost: localhost\r\nConnection: keep-alive\r\n\r\n";
         let request = Request::new(raw_request.as_bytes()).unwrap();
         assert!(request.wants_keep_alive());
+    }
+
+    #[test]
+    fn test_accepts_encoding_gzip() {
+        let raw_request = "GET / HTTP/1.1\r\nHost: localhost\r\nAccept-Encoding: gzip, deflate\r\n\r\n";
+        let request = Request::new(raw_request.as_bytes()).unwrap();
+        assert!(request.accepts_encoding("gzip"));
+        assert!(request.accepts_encoding("deflate"));
+        assert!(!request.accepts_encoding("br"));
+    }
+
+    #[test]
+    fn test_accepts_encoding_missing() {
+        let raw_request = "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n";
+        let request = Request::new(raw_request.as_bytes()).unwrap();
+        assert!(!request.accepts_encoding("gzip"));
     }
 
     #[test]

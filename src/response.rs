@@ -47,21 +47,45 @@ impl Response {
         }
     }
 
-    pub fn to_http_bytes(&self, connection: &str) -> Vec<u8> {
-        format!(
+    pub fn to_http_bytes(&self, connection: &str, encoding: Option<&str>) -> Vec<u8> {
+        let (body_bytes, content_encoding) = match encoding {
+            Some("gzip") => {
+                use flate2::write::GzEncoder;
+                use flate2::Compression;
+                use std::io::Write;
+
+                let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+                encoder
+                    .write_all(self.body.as_bytes())
+                    .expect("fallo al escribir en el compresor gzip");
+                let compressed = encoder
+                    .finish()
+                    .expect("fallo al finalizar la compresión gzip");
+                (compressed, Some("gzip"))
+            }
+            _ => (self.body.clone().into_bytes(), None),
+        };
+
+        let mut headers = format!(
             "HTTP/1.1 {} {}\r\n\
              Content-Type: {}\r\n\
              Content-Length: {}\r\n\
-             Connection: {}\r\n\
-             \r\n\
-             {}",
+             Connection: {}\r\n",
             self.status,
             self.reason_phrase(),
             self.content_type,
-            self.body.as_bytes().len(),
+            body_bytes.len(),
             connection,
-            self.body
-        )
-        .into_bytes()
+        );
+
+        if let Some(content_encoding) = content_encoding {
+            headers.push_str(&format!("Content-Encoding: {}\r\n", content_encoding));
+        }
+
+        headers.push_str("\r\n");
+
+        let mut response = headers.into_bytes();
+        response.extend_from_slice(&body_bytes);
+        response
     }
 }

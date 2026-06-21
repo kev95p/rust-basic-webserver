@@ -52,7 +52,7 @@ async fn handle_connection(socket: &mut TcpStream) -> Result<()> {
             Err(e) => {
                 eprintln!("Petición malformada: {}", e);
                 let response = Response::bad_request();
-                send_response(socket, &response, "close", "respuesta 400").await?;
+                send_response(socket, &response, "close", None, "respuesta 400").await?;
                 return Ok(());
             }
         };
@@ -61,9 +61,14 @@ async fn handle_connection(socket: &mut TcpStream) -> Result<()> {
 
         keep_alive = request.wants_keep_alive();
         let connection_header = if keep_alive { "keep-alive" } else { "close" };
+        let encoding = if request.accepts_encoding("gzip") {
+            Some("gzip")
+        } else {
+            None
+        };
 
         let response = handle_request(&request);
-        send_response(socket, &response, connection_header, "respuesta").await?;
+        send_response(socket, &response, connection_header, encoding, "respuesta").await?;
     }
 
     Ok(())
@@ -73,10 +78,11 @@ async fn send_response(
     socket: &mut TcpStream,
     response: &Response,
     connection: &str,
+    encoding: Option<&str>,
     context: &str,
 ) -> Result<()> {
     socket
-        .write_all(&response.to_http_bytes(connection))
+        .write_all(&response.to_http_bytes(connection, encoding))
         .await
         .with_context(|| format!("fallo al escribir {}", context))?;
     socket
@@ -140,30 +146,59 @@ mod tests {
     #[test]
     fn test_response_to_http_bytes() {
         let response = Response::ok("<h1>Hola</h1>");
-        let bytes = response.to_http_bytes("close");
+        let bytes = response.to_http_bytes("close", None);
         let text = String::from_utf8(bytes).unwrap();
 
         assert!(text.starts_with("HTTP/1.1 200 OK\r\n"));
         assert!(text.contains("Content-Type: text/html; charset=utf-8\r\n"));
         assert!(text.contains("Content-Length: 13\r\n"));
         assert!(text.contains("Connection: close\r\n"));
+        assert!(!text.contains("Content-Encoding:"));
         assert!(text.ends_with("<h1>Hola</h1>"));
     }
 
     #[test]
     fn test_response_to_http_bytes_keep_alive() {
         let response = Response::ok("<h1>Hola</h1>");
-        let bytes = response.to_http_bytes("keep-alive");
+        let bytes = response.to_http_bytes("keep-alive", None);
         let text = String::from_utf8(bytes).unwrap();
 
         assert!(text.contains("Connection: keep-alive\r\n"));
     }
 
     #[test]
+    fn test_response_to_http_bytes_gzip() {
+        use flate2::read::GzDecoder;
+        use std::io::Read;
+
+        let response = Response::ok("<h1>Hola</h1>");
+        let bytes = response.to_http_bytes("close", Some("gzip"));
+        let text = String::from_utf8_lossy(&bytes);
+
+        assert!(text.contains("HTTP/1.1 200 OK\r\n"));
+        assert!(text.contains("Content-Encoding: gzip\r\n"));
+        assert!(text.contains("Connection: close\r\n"));
+
+        // Separar headers del cuerpo comprimido.
+        let separator = b"\r\n\r\n";
+        let body_start = bytes
+            .windows(separator.len())
+            .position(|window| window == separator)
+            .unwrap()
+            + separator.len();
+        let compressed = &bytes[body_start..];
+
+        let mut decoder = GzDecoder::new(compressed);
+        let mut decoded = String::new();
+        decoder.read_to_string(&mut decoded).unwrap();
+        assert_eq!(decoded, "<h1>Hola</h1>");
+    }
+
+    #[test]
     fn test_not_found_response() {
         let response = Response::not_found();
         assert_eq!(response.status, 404);
-        let bytes = response.to_http_bytes("close");
+        let bytes = response.to_http_bytes("close", None);
         let text = String::from_utf8(bytes).unwrap();
         assert!(text.starts_with("HTTP/1.1 404 Not Found\r\n"));
     }
@@ -172,7 +207,7 @@ mod tests {
     fn test_method_not_allowed_response() {
         let response = Response::method_not_allowed();
         assert_eq!(response.status, 405);
-        let bytes = response.to_http_bytes("close");
+        let bytes = response.to_http_bytes("close", None);
         let text = String::from_utf8(bytes).unwrap();
         assert!(text.starts_with("HTTP/1.1 405 Method Not Allowed\r\n"));
     }
