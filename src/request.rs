@@ -2,6 +2,18 @@ use std::collections::HashMap;
 
 use anyhow::{anyhow, Result};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Method {
+    Get,
+    Post,
+    Put,
+    Delete,
+    Patch,
+    Head,
+    Options,
+    Unsupported,
+}
+
 #[derive(Debug)]
 pub struct Request {
     method: String,
@@ -29,6 +41,42 @@ impl Request {
         })
     }
 
+    pub fn method(&self) -> Method {
+        match self.method.as_str() {
+            "GET" => Method::Get,
+            "POST" => Method::Post,
+            "PUT" => Method::Put,
+            "DELETE" => Method::Delete,
+            "PATCH" => Method::Patch,
+            "HEAD" => Method::Head,
+            "OPTIONS" => Method::Options,
+            _ => Method::Unsupported,
+        }
+    }
+
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+
+    pub fn query(&self) -> Option<&str> {
+        self.query.as_deref()
+    }
+
+    pub fn version(&self) -> &str {
+        &self.version
+    }
+
+    pub fn wants_keep_alive(&self) -> bool {
+        match self.headers.get("Connection") {
+            Some(conn) if conn.eq_ignore_ascii_case("close") => false,
+            Some(conn) if conn.eq_ignore_ascii_case("keep-alive") => true,
+            // HTTP/1.1 mantiene la conexión abierta por defecto;
+            // HTTP/1.0 la cierra por defecto.
+            None => self.version == "HTTP/1.1",
+            _ => self.version == "HTTP/1.1",
+        }
+    }
+
     fn parse_payload(request_payload: &[u8]) -> Result<Vec<String>> {
         let parsed_request = String::from_utf8(request_payload.to_vec())?;
         Ok(parsed_request
@@ -38,9 +86,7 @@ impl Request {
             .collect())
     }
 
-    fn extract_request_line(
-        payload: &str,
-    ) -> Result<(&str, &str, Option<&str>, &str)> {
+    fn extract_request_line(payload: &str) -> Result<(&str, &str, Option<&str>, &str)> {
         let mut parts = payload.split_whitespace();
         let method = parts.next().ok_or_else(|| anyhow!("falta method"))?;
         let target = parts.next().ok_or_else(|| anyhow!("falta path"))?;
@@ -58,9 +104,7 @@ impl Request {
         Ok((method, path, query, version))
     }
 
-    fn extract_headers(
-        payload: &[String],
-    ) -> Result<HashMap<String, String>> {
+    fn extract_headers(payload: &[String]) -> Result<HashMap<String, String>> {
         let mut headers = HashMap::new();
         for line in payload {
             let (key, value) = line
@@ -156,6 +200,35 @@ mod tests {
     fn test_new_rejects_malformed_request() {
         let raw_request = "INVALID\r\n\r\n";
         assert!(Request::new(raw_request.as_bytes()).is_err());
+    }
+
+    #[test]
+    fn test_wants_keep_alive_http11_default() {
+        let raw_request = "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n";
+        let request = Request::new(raw_request.as_bytes()).unwrap();
+        assert!(request.wants_keep_alive());
+    }
+
+    #[test]
+    fn test_wants_keep_alive_with_close_header() {
+        let raw_request = "GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+        let request = Request::new(raw_request.as_bytes()).unwrap();
+        assert!(!request.wants_keep_alive());
+    }
+
+    #[test]
+    fn test_wants_keep_alive_http10_default() {
+        let raw_request = "GET / HTTP/1.0\r\nHost: localhost\r\n\r\n";
+        let request = Request::new(raw_request.as_bytes()).unwrap();
+        assert!(!request.wants_keep_alive());
+    }
+
+    #[test]
+    fn test_wants_keep_alive_http10_with_keep_alive_header() {
+        let raw_request =
+            "GET / HTTP/1.0\r\nHost: localhost\r\nConnection: keep-alive\r\n\r\n";
+        let request = Request::new(raw_request.as_bytes()).unwrap();
+        assert!(request.wants_keep_alive());
     }
 
     #[test]
