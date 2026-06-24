@@ -33,12 +33,12 @@ pub fn serve(request_path: &str) -> Option<Response> {
 
 fn content_type_from_extension(path: &Path) -> Cow<'static, str> {
     match path.extension().and_then(|e| e.to_str()) {
-        Some("html") | Some("htm") => Cow::Borrowed("text/html; charset=utf-8"),
+        Some("html" | "htm") => Cow::Borrowed("text/html; charset=utf-8"),
         Some("css") => Cow::Borrowed("text/css; charset=utf-8"),
         Some("js") => Cow::Borrowed("application/javascript; charset=utf-8"),
         Some("json") => Cow::Borrowed("application/json"),
         Some("png") => Cow::Borrowed("image/png"),
-        Some("jpg") | Some("jpeg") => Cow::Borrowed("image/jpeg"),
+        Some("jpg" | "jpeg") => Cow::Borrowed("image/jpeg"),
         Some("gif") => Cow::Borrowed("image/gif"),
         Some("svg") => Cow::Borrowed("image/svg+xml"),
         Some("ico") => Cow::Borrowed("image/x-icon"),

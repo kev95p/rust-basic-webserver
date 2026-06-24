@@ -1,0 +1,7 @@
+# Versión mínima soportada de Rust (Minimum Supported Rust Version).
+# Clippy usa este valor para sugerir mejoras compatibles con esta versión.
+msrv = "1.96.0"
+
+# Evita sugerencias que rompan la API pública de una crate.
+# Útil si el proyecto se publica en crates.io o se usa como biblioteca.
+avoid-breaking-exported-api = true

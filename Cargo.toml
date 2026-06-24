@@ -7,3 +7,16 @@ edition = "2024"
 anyhow = "1"
 flate2 = "1"
 tokio = { version = "1", features = ["full"] }
+
+[lints.clippy]
+# Grupos principales: errores de corrección y código sospechoso fallan el build.
+correctness = "deny"
+suspicious = "deny"
+
+# Grupos de calidad y estilo se reportan como advertencias para no bloquear,
+# pero mantienen el código limpio durante el desarrollo.
+all = "warn"
+complexity = "warn"
+perf = "warn"
+style = "warn"
+pedantic = "warn"

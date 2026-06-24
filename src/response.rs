@@ -58,6 +58,8 @@ impl Response {
     }
 
     pub fn to_http_bytes(&self, connection: &str, encoding: Option<&str>) -> Vec<u8> {
+        use std::fmt::Write;
+
         let (body_bytes, content_encoding) = match encoding {
             Some("gzip") => {
                 use flate2::write::GzEncoder;
@@ -89,7 +91,7 @@ impl Response {
         );
 
         if let Some(content_encoding) = content_encoding {
-            headers.push_str(&format!("Content-Encoding: {}\r\n", content_encoding));
+            let _ = write!(headers, "Content-Encoding: {content_encoding}\r\n");
         }
 
         headers.push_str("\r\n");
@@ -150,9 +152,9 @@ mod tests {
         let compressed = &bytes[body_start..];
 
         let mut decoder = GzDecoder::new(compressed);
-        let mut decoded = String::new();
-        decoder.read_to_string(&mut decoded).unwrap();
-        assert_eq!(decoded, "<h1>Hola</h1>");
+        let mut output = String::new();
+        decoder.read_to_string(&mut output).unwrap();
+        assert_eq!(output, "<h1>Hola</h1>");
     }
 
     #[test]

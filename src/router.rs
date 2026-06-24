@@ -5,8 +5,7 @@ use crate::static_files;
 
 pub fn route(request: &Request) -> Response {
     match (request.method(), request.path()) {
-        (Method::Get, "/") => handlers::home(),
-        (Method::Get, "/home") => handlers::home(),
+        (Method::Get, "/" | "/home") => handlers::home(),
         (Method::Get, path) => static_files::serve(path).unwrap_or_else(Response::not_found),
         // Por ahora solo soportamos GET; cualquier otro método devuelve 405.
         _ => Response::method_not_allowed(),

@@ -36,7 +36,7 @@ impl Request {
         Ok(Self {
             method: method.to_string(),
             path: path.to_string(),
-            query: query.map(|q| q.to_string()),
+            query: query.map(std::string::ToString::to_string),
             version: version.to_string(),
             headers,
         })
@@ -65,7 +65,6 @@ impl Request {
             Some(conn) if conn.eq_ignore_ascii_case("keep-alive") => true,
             // HTTP/1.1 mantiene la conexión abierta por defecto;
             // HTTP/1.0 la cierra por defecto.
-            None => self.version == "HTTP/1.1",
             _ => self.version == "HTTP/1.1",
         }
     }
@@ -73,12 +72,11 @@ impl Request {
     pub fn accepts_encoding(&self, encoding: &str) -> bool {
         self.headers
             .get("Accept-Encoding")
-            .map(|value| {
+            .is_some_and(|value| {
                 value
                     .split(',')
                     .any(|part| part.trim().eq_ignore_ascii_case(encoding))
             })
-            .unwrap_or(false)
     }
 
     fn parse_payload(request_payload: &[u8]) -> Result<Vec<String>> {
@@ -113,7 +111,7 @@ impl Request {
         for line in payload {
             let (key, value) = line
                 .split_once(':')
-                .ok_or_else(|| anyhow!("header inválido: {}", line))?;
+                .ok_or_else(|| anyhow!("header inválido: {line}"))?;
             headers.insert(key.trim().to_string(), value.trim().to_string());
         }
         Ok(headers)
@@ -139,7 +137,7 @@ mod tests {
             "Accept-Encoding: gzip, deflate",
             "Connection: keep-alive",
         ]
-        .map(|st| st.to_string())
+        .map(std::string::ToString::to_string)
         .to_vec();
         let result = Request::extract_headers(&input).unwrap();
         assert_eq!(result["Sec-Fetch-Dest"], "document");
@@ -148,7 +146,7 @@ mod tests {
 
     #[test]
     fn test_extract_headers_invalid() {
-        let input = ["Host localhost"].map(|st| st.to_string()).to_vec();
+        let input = ["Host localhost"].map(std::string::ToString::to_string).to_vec();
         assert!(Request::extract_headers(&input).is_err());
     }
 
@@ -279,7 +277,7 @@ mod tests {
             "Accept-Encoding: gzip, deflate",
             "Connection: keep-alive"
         ]
-        .map(|st| st.to_string())
+        .map(std::string::ToString::to_string)
         .to_vec();
 
         let bytes = raw_request.as_bytes().to_vec();

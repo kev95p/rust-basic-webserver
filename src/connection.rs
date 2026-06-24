@@ -31,14 +31,14 @@ pub async fn handle(socket: &mut TcpStream) -> Result<()> {
         let request = match Request::new(&request_bytes) {
             Ok(req) => req,
             Err(e) => {
-                eprintln!("Petición malformada: {}", e);
+                eprintln!("Petición malformada: {e}");
                 let response = Response::bad_request();
                 send_response(socket, &response, "close", None, "respuesta 400").await?;
                 return Ok(());
             }
         };
 
-        println!("{:?}", request);
+        println!("{request:?}");
 
         keep_alive = request.wants_keep_alive();
         let connection_header = if keep_alive { "keep-alive" } else { "close" };
@@ -65,11 +65,11 @@ async fn send_response(
     socket
         .write_all(&response.to_http_bytes(connection, encoding))
         .await
-        .with_context(|| format!("fallo al escribir {}", context))?;
+        .with_context(|| format!("fallo al escribir {context}"))?;
     socket
         .flush()
         .await
-        .with_context(|| format!("fallo al hacer flush {}", context))?;
+        .with_context(|| format!("fallo al hacer flush {context}"))?;
     Ok(())
 }
 

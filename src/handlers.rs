@@ -5,10 +5,10 @@ pub fn home() -> Response {
 }
 
 fn home_page() -> String {
-    r#"<!DOCTYPE html>
+    r"<!DOCTYPE html>
 <html>
 <head><title>Mi Server</title></head>
 <body><h1>¡Hola desde Rust!</h1></body>
-</html>"#
+</html>"
     .to_string()
 }

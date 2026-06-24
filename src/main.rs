@@ -19,7 +19,7 @@ async fn main() -> Result<()> {
         let (mut socket, _) = tcp_listener.accept().await?;
         tokio::spawn(async move {
             if let Err(e) = connection::handle(&mut socket).await {
-                eprintln!("Error en conexión: {}", e);
+                eprintln!("Error en conexión: {e}");
             }
         });
     }
