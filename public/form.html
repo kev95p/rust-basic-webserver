@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Formulario de contacto</title>
+    <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+    <header class="site-header">
+        <nav class="navbar">
+            <div class="brand">RustServer</div>
+            <ul class="nav-links">
+                <li><a href="/">Inicio</a></li>
+                <li><a href="/index.html">Página estática</a></li>
+                <li><a href="/home">Home dinámico</a></li>
+                <li><a href="/form.html">Formulario</a></li>
+            </ul>
+        </nav>
+    </header>
+
+    <main class="container">
+        <section class="hero">
+            <h1>Envíanos un mensaje</h1>
+            <p class="lead">
+                Este formulario hace un <code>POST</code> a <code>/submit</code>.
+                Por ahora el servidor no procesa la ruta, así que verás un error
+                405 en el navegador, pero en la consola del servidor podrás ver
+                cómo llega la petición.
+            </p>
+        </section>
+
+        <section class="card form-card">
+            <form action="/submit" method="POST">
+                <div class="form-group">
+                    <label for="nombre">Nombre</label>
+                    <input type="text" id="nombre" name="nombre" required>
+                </div>
+
+                <div class="form-group">
+                    <label for="email">Correo electrónico</label>
+                    <input type="email" id="email" name="email" required>
+                </div>
+
+                <div class="form-group">
+                    <label for="mensaje">Mensaje</label>
+                    <textarea id="mensaje" name="mensaje" rows="5" required></textarea>
+                </div>
+
+                <button type="submit" class="btn-primary">Enviar mensaje</button>
+            </form>
+        </section>
+    </main>
+
+    <footer class="site-footer">
+        <p>Construido con Rust y Tokio.</p>
+    </footer>
+</body>
+</html>
