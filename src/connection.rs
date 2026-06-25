@@ -5,25 +5,35 @@ use tokio::{
     time::{timeout, Duration},
 };
 
-use crate::request::Request;
+use crate::request::{Method, Request};
 use crate::response::Response;
 use crate::router;
 
 const MAX_REQUEST_SIZE: usize = 8 * 1024;
+const READ_TIMEOUT: Duration = Duration::from_secs(5);
+const CHUNK_SIZE: usize = 1024;
 
-pub async fn handle(socket: &mut TcpStream) -> Result<()> {
+pub async fn handle(mut socket: TcpStream) -> Result<()> {
     let mut keep_alive = true;
 
     while keep_alive {
-        let request_bytes = match timeout(Duration::from_secs(5), read_request(socket)).await {
-            Ok(Ok(Some(bytes))) => bytes,
-            Ok(Ok(None)) => {
+        let request_bytes = match read_request(&mut socket).await {
+            Ok(Some(bytes)) => bytes,
+            Ok(None) => {
                 println!("Cliente cerró la conexión");
                 return Ok(());
             }
-            Ok(Err(e)) => return Err(e),
-            Err(_) => {
-                println!("Timeout esperando siguiente petición");
+            Err(e) => {
+                eprintln!("Error leyendo petición: {e}");
+                let response = Response::bad_request();
+                let _ = send_response(
+                    &mut socket,
+                    response,
+                    "close",
+                    None,
+                    "respuesta 400",
+                )
+                .await;
                 return Ok(());
             }
         };
@@ -33,12 +43,11 @@ pub async fn handle(socket: &mut TcpStream) -> Result<()> {
             Err(e) => {
                 eprintln!("Petición malformada: {e}");
                 let response = Response::bad_request();
-                send_response(socket, &response, "close", None, "respuesta 400").await?;
+                send_response(&mut socket, response, "close", None, "respuesta 400")
+                    .await?;
                 return Ok(());
             }
         };
-
-        println!("{request:?}");
 
         keep_alive = request.wants_keep_alive();
         let connection_header = if keep_alive { "keep-alive" } else { "close" };
@@ -48,8 +57,19 @@ pub async fn handle(socket: &mut TcpStream) -> Result<()> {
             None
         };
 
-        let response = router::route(&request);
-        send_response(socket, &response, connection_header, encoding, "respuesta").await?;
+        let mut response = router::route(&request).await;
+        if request.method() == Method::Head {
+            response = response.head();
+        }
+
+        send_response(
+            &mut socket,
+            response,
+            connection_header,
+            encoding,
+            "respuesta",
+        )
+        .await?;
     }
 
     Ok(())
@@ -57,13 +77,20 @@ pub async fn handle(socket: &mut TcpStream) -> Result<()> {
 
 async fn send_response(
     socket: &mut TcpStream,
-    response: &Response,
+    response: Response,
     connection: &str,
     encoding: Option<&str>,
     context: &str,
 ) -> Result<()> {
+    let bytes = response.into_http_bytes(connection, encoding).unwrap_or_else(|e| {
+        eprintln!("fallo al serializar respuesta: {e}");
+        Response::internal_server_error()
+            .into_http_bytes("close", None)
+            .unwrap_or_default()
+    });
+
     socket
-        .write_all(&response.to_http_bytes(connection, encoding))
+        .write_all(&bytes)
         .await
         .with_context(|| format!("fallo al escribir {context}"))?;
     socket
@@ -74,11 +101,14 @@ async fn send_response(
 }
 
 async fn read_request(socket: &mut TcpStream) -> Result<Option<Vec<u8>>> {
-    let mut buffer = Vec::new();
-    let mut temp = [0u8; 1024];
+    let mut buffer = Vec::with_capacity(CHUNK_SIZE);
+    let mut temp = [0u8; CHUNK_SIZE];
 
     loop {
-        let n = socket.read(&mut temp).await?;
+        let n = timeout(READ_TIMEOUT, socket.read(&mut temp))
+            .await
+            .with_context(|| "timeout leyendo del socket")??;
+
         if n == 0 {
             if buffer.is_empty() {
                 // El cliente cerró la conexión de forma limpia.

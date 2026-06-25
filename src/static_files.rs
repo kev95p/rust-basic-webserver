@@ -1,34 +1,70 @@
 use std::borrow::Cow;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
+
+use percent_encoding::percent_decode_str;
+use thiserror::Error;
+use tokio::fs;
 
 use crate::response::Response;
 
 const PUBLIC_DIR: &str = "public";
+const MAX_FILE_SIZE: u64 = 10 * 1024 * 1024; // 10 MB
 
-pub fn serve(request_path: &str) -> Option<Response> {
-    let root = Path::new(PUBLIC_DIR).canonicalize().ok()?;
-    let relative = request_path.trim_start_matches('/');
+static ROOT: LazyLock<PathBuf> =
+    LazyLock::new(|| Path::new(PUBLIC_DIR).canonicalize().unwrap_or_else(|_| PathBuf::from(PUBLIC_DIR)));
+
+#[derive(Debug, Error)]
+pub enum StaticFileError {
+    #[error("path traversal detectado")]
+    BadPath,
+    #[error("archivo no encontrado")]
+    NotFound,
+    #[error("archivo demasiado grande")]
+    TooLarge,
+    #[error("error de lectura: {0}")]
+    Io(#[from] std::io::Error),
+}
+
+pub async fn serve(request_path: &str) -> Result<Response, StaticFileError> {
+    let decoded = percent_decode_str(request_path).decode_utf8_lossy();
+    let relative = decoded.trim_start_matches('/');
 
     if relative.is_empty() {
-        return serve("index.html");
+        serve_path("index.html").await
+    } else {
+        serve_path(relative).await
     }
+}
 
-    // Bloquear path traversal de forma simple y mediante canonicalización.
-    if relative.contains("..") {
-        return None;
-    }
-
-    let file_path = root.join(relative).canonicalize().ok()?;
+async fn serve_path(relative: &str) -> Result<Response, StaticFileError> {
+    let root = ROOT.clone();
+    let file_path = match root.join(relative).canonicalize() {
+        Ok(path) => path,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(StaticFileError::NotFound);
+        }
+        Err(e) => return Err(StaticFileError::Io(e)),
+    };
 
     // Asegurar que el archivo resuelto siga dentro de public/.
-    if !file_path.starts_with(&root) || !file_path.is_file() {
-        return None;
+    if !file_path.starts_with(&root) {
+        return Err(StaticFileError::BadPath);
     }
 
-    let content = std::fs::read(&file_path).ok()?;
+    if !file_path.is_file() {
+        return Err(StaticFileError::NotFound);
+    }
+
+    let metadata = fs::metadata(&file_path).await?;
+    if metadata.len() > MAX_FILE_SIZE {
+        return Err(StaticFileError::TooLarge);
+    }
+
+    let content = fs::read(&file_path).await?;
     let content_type = content_type_from_extension(&file_path);
 
-    Some(Response::static_file(content_type, content))
+    Ok(Response::static_file(content_type, content))
 }
 
 fn content_type_from_extension(path: &Path) -> Cow<'static, str> {
@@ -51,9 +87,9 @@ fn content_type_from_extension(path: &Path) -> Cow<'static, str> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_serve_static_file_txt() {
-        let response = serve("test.txt").unwrap();
+    #[tokio::test]
+    async fn test_serve_static_file_txt() {
+        let response = serve("test.txt").await.unwrap();
         assert_eq!(response.status, 200);
         assert_eq!(response.content_type, "text/plain; charset=utf-8");
         assert_eq!(
@@ -62,17 +98,17 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_serve_static_file_html() {
-        let response = serve("test.html").unwrap();
+    #[tokio::test]
+    async fn test_serve_static_file_html() {
+        let response = serve("test.html").await.unwrap();
         assert_eq!(response.status, 200);
         assert_eq!(response.content_type, "text/html; charset=utf-8");
         assert!(String::from_utf8_lossy(&response.body).contains("Archivo estático HTML"));
     }
 
-    #[test]
-    fn test_serve_static_index_html() {
-        let response = serve("index.html").unwrap();
+    #[tokio::test]
+    async fn test_serve_static_index_html() {
+        let response = serve("index.html").await.unwrap();
         assert_eq!(response.status, 200);
         assert_eq!(response.content_type, "text/html; charset=utf-8");
 
@@ -83,9 +119,9 @@ mod tests {
         assert!(body.contains("RustServer"));
     }
 
-    #[test]
-    fn test_serve_static_styles_css() {
-        let response = serve("styles.css").unwrap();
+    #[tokio::test]
+    async fn test_serve_static_styles_css() {
+        let response = serve("styles.css").await.unwrap();
         assert_eq!(response.status, 200);
         assert_eq!(response.content_type, "text/css; charset=utf-8");
 
@@ -94,9 +130,9 @@ mod tests {
         assert!(body.contains(".site-header"));
     }
 
-    #[test]
-    fn test_serve_static_app_js() {
-        let response = serve("app.js").unwrap();
+    #[tokio::test]
+    async fn test_serve_static_app_js() {
+        let response = serve("app.js").await.unwrap();
         assert_eq!(response.status, 200);
         assert_eq!(response.content_type, "application/javascript; charset=utf-8");
 
@@ -105,13 +141,26 @@ mod tests {
         assert!(body.contains("action-button"));
     }
 
-    #[test]
-    fn test_serve_static_blocks_traversal() {
-        assert!(serve("../Cargo.toml").is_none());
+    #[tokio::test]
+    async fn test_serve_static_blocks_traversal() {
+        assert!(matches!(
+            serve("../Cargo.toml").await.unwrap_err(),
+            StaticFileError::BadPath | StaticFileError::NotFound
+        ));
     }
 
-    #[test]
-    fn test_serve_static_missing_file() {
-        assert!(serve("no_existe.txt").is_none());
+    #[tokio::test]
+    async fn test_serve_static_missing_file() {
+        assert!(matches!(
+            serve("no_existe.txt").await.unwrap_err(),
+            StaticFileError::NotFound
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_serve_static_decodes_percent_encoding() {
+        let response = serve("test%2Etxt").await.unwrap();
+        assert_eq!(response.status, 200);
+        assert_eq!(response.content_type, "text/plain; charset=utf-8");
     }
 }

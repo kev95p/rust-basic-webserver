@@ -2,11 +2,14 @@
 name = "basic-webserver"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.96.0"
 
 [dependencies]
 anyhow = "1"
 flate2 = "1"
-tokio = { version = "1", features = ["full"] }
+percent-encoding = "2"
+thiserror = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "io-util", "time", "fs", "sync"] }
 
 [lints.clippy]
 # Grupos principales: errores de corrección y código sospechoso fallan el build.
