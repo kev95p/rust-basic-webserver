@@ -5,30 +5,36 @@ use tokio::{
     time::{timeout, Duration},
 };
 
-use crate::request::{Method, Request};
+use crate::request::{Method, Request, RequestError};
 use crate::response::Response;
 use crate::router;
 
 const MAX_REQUEST_SIZE: usize = 8 * 1024;
+const MAX_BODY_SIZE: usize = 1024 * 1024;
 const READ_TIMEOUT: Duration = Duration::from_secs(5);
 const CHUNK_SIZE: usize = 1024;
 
 pub async fn handle(mut socket: TcpStream) -> Result<()> {
+    let peer = socket
+        .peer_addr()
+        .map_or_else(|_| "desconocido".to_string(), |addr| addr.to_string());
+    let span = tracing::info_span!("connection", peer = %peer);
+    let _enter = span.enter();
+
     let mut keep_alive = true;
 
     while keep_alive {
         let request_bytes = match read_request(&mut socket).await {
             Ok(Some(bytes)) => bytes,
             Ok(None) => {
-                println!("Cliente cerró la conexión");
+                tracing::info!("cliente cerró la conexión");
                 return Ok(());
             }
             Err(e) => {
-                eprintln!("Error leyendo petición: {e}");
-                let response = Response::bad_request();
+                tracing::warn!("error leyendo petición: {e}");
                 let _ = send_response(
                     &mut socket,
-                    response,
+                    Response::bad_request(),
                     "close",
                     None,
                     "respuesta 400",
@@ -38,13 +44,49 @@ pub async fn handle(mut socket: TcpStream) -> Result<()> {
             }
         };
 
-        let request = match Request::new(&request_bytes) {
-            Ok(req) => req,
+        let request = match parse_request_with_body(&mut socket, request_bytes).await {
+            Ok(req) => {
+                tracing::info!(
+                    method = ?req.method(),
+                    path = req.path(),
+                    "petición recibida"
+                );
+                req
+            }
+            Err(RequestError::ChunkedNotSupported) => {
+                tracing::warn!("Transfer-Encoding chunked no soportado");
+                send_response(
+                    &mut socket,
+                    Response::not_implemented(),
+                    "close",
+                    None,
+                    "respuesta 501",
+                )
+                .await?;
+                return Ok(());
+            }
+            Err(RequestError::IncompleteBody(missing)) => {
+                tracing::warn!("body incompleto, faltan {missing} bytes");
+                send_response(
+                    &mut socket,
+                    Response::bad_request(),
+                    "close",
+                    None,
+                    "respuesta 400",
+                )
+                .await?;
+                return Ok(());
+            }
             Err(e) => {
-                eprintln!("Petición malformada: {e}");
-                let response = Response::bad_request();
-                send_response(&mut socket, response, "close", None, "respuesta 400")
-                    .await?;
+                tracing::warn!("petición malformada: {e}");
+                send_response(
+                    &mut socket,
+                    Response::bad_request(),
+                    "close",
+                    None,
+                    "respuesta 400",
+                )
+                .await?;
                 return Ok(());
             }
         };
@@ -75,6 +117,50 @@ pub async fn handle(mut socket: TcpStream) -> Result<()> {
     Ok(())
 }
 
+async fn parse_request_with_body(
+    socket: &mut TcpStream,
+    mut buffer: Vec<u8>,
+) -> Result<Request, RequestError> {
+    loop {
+        match Request::new(&buffer) {
+            Ok(request) => return Ok(request),
+            Err(RequestError::IncompleteBody(missing)) => {
+                if buffer.len() + missing > MAX_BODY_SIZE {
+                    return Err(RequestError::Malformed(
+                        "body excede tamaño máximo".to_string(),
+                    ));
+                }
+                read_exact_bytes(socket, &mut buffer, missing).await?;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+async fn read_exact_bytes(
+    socket: &mut TcpStream,
+    buffer: &mut Vec<u8>,
+    n: usize,
+) -> Result<(), RequestError> {
+    let mut temp = vec![0u8; n];
+    let mut read = 0;
+
+    while read < n {
+        let count = timeout(READ_TIMEOUT, socket.read(&mut temp[read..]))
+            .await
+            .map_err(|_| RequestError::Malformed("timeout leyendo body".to_string()))?
+            .map_err(|e| RequestError::Malformed(format!("error leyendo body: {e}")))?;
+
+        if count == 0 {
+            return Err(RequestError::IncompleteBody(n - read));
+        }
+        read += count;
+    }
+
+    buffer.extend_from_slice(&temp);
+    Ok(())
+}
+
 async fn send_response(
     socket: &mut TcpStream,
     response: Response,
@@ -83,7 +169,7 @@ async fn send_response(
     context: &str,
 ) -> Result<()> {
     let bytes = response.into_http_bytes(connection, encoding).unwrap_or_else(|e| {
-        eprintln!("fallo al serializar respuesta: {e}");
+        tracing::error!("fallo al serializar respuesta: {e}");
         Response::internal_server_error()
             .into_http_bytes("close", None)
             .unwrap_or_default()
@@ -130,3 +216,5 @@ async fn read_request(socket: &mut TcpStream) -> Result<Option<Vec<u8>>> {
         }
     }
 }
+
+

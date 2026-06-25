@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::io::{self, Write as _};
+use std::time::SystemTime;
 
 const GZIP_MIN_SIZE: usize = 20;
 
@@ -123,8 +124,11 @@ impl Response {
             (self.body, None)
         };
 
+        let date = httpdate::fmt_http_date(SystemTime::now());
+
         let mut headers = format!(
             "HTTP/1.1 {status} {reason}\r\n\
+             Date: {date}\r\n\
              Content-Type: {content_type}\r\n\
              Content-Length: {}\r\n\
              Connection: {connection}\r\n",
@@ -174,6 +178,7 @@ mod tests {
         let text = String::from_utf8(bytes).unwrap();
 
         assert!(text.starts_with("HTTP/1.1 200 OK\r\n"));
+        assert!(text.contains("Date: "));
         assert!(text.contains("Content-Type: text/html; charset=utf-8\r\n"));
         assert!(text.contains("Content-Length: 13\r\n"));
         assert!(text.contains("Connection: close\r\n"));

@@ -13,7 +13,7 @@ pub async fn route(request: &Request) -> Response {
         (Method::Get | Method::Head, path) => static_files::serve(path)
             .await
             .unwrap_or_else(|e| {
-                eprintln!("Error sirviendo archivo estático: {e}");
+                tracing::warn!("Error sirviendo archivo estático: {e}");
                 Response::not_found()
             }),
         (_, path) if KNOWN_PATHS.contains(&path) => Response::method_not_allowed(),

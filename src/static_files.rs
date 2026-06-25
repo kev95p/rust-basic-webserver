@@ -61,6 +61,8 @@ async fn serve_path(relative: &str) -> Result<Response, StaticFileError> {
         return Err(StaticFileError::TooLarge);
     }
 
+    tracing::info!(file = %file_path.display(), "sirviendo archivo estático");
+
     let content = fs::read(&file_path).await?;
     let content_type = content_type_from_extension(&file_path);
 

@@ -1,11 +1,12 @@
 use std::collections::HashMap;
 
-use anyhow::{anyhow, Result};
+use thiserror::Error;
 
 const MAX_REQUEST_LINE_LEN: usize = 8 * 1024;
 const MAX_HEADER_LEN: usize = 8 * 1024;
 const MAX_HEADERS_COUNT: usize = 100;
 const MAX_HEADERS_SIZE: usize = 8 * 1024;
+const MAX_BODY_SIZE: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Method {
@@ -34,6 +35,16 @@ impl Method {
     }
 }
 
+#[derive(Debug, Error)]
+pub enum RequestError {
+    #[error("petición malformada: {0}")]
+    Malformed(String),
+    #[error("body incompleto, faltan {0} bytes")]
+    IncompleteBody(usize),
+    #[error("Transfer-Encoding chunked no está soportado")]
+    ChunkedNotSupported,
+}
+
 #[derive(Debug)]
 pub struct Request {
     method: Method,
@@ -43,26 +54,51 @@ pub struct Request {
     #[allow(dead_code)]
     version: String,
     headers: HashMap<String, String>,
+    body: Vec<u8>,
 }
 
 impl Request {
-    pub fn new(request_payload: &[u8]) -> Result<Self> {
-        let (head, _body) = split_head_body(request_payload)?;
+    pub fn new(request_payload: &[u8]) -> Result<Self, RequestError> {
+        let (head, body_after_headers) = split_head_body(request_payload)
+            .map_err(|e| RequestError::Malformed(e.to_string()))?;
         let head = std::str::from_utf8(head)
-            .map_err(|_| anyhow!("headers no son UTF-8 válido"))?;
+            .map_err(|_| RequestError::Malformed("headers no son UTF-8 válido".to_string()))?;
 
         let mut lines = head.split("\r\n");
         let request_line = lines
             .next()
-            .ok_or_else(|| anyhow!("petición vacía"))?
+            .ok_or_else(|| RequestError::Malformed("petición vacía".to_string()))?
             .trim();
 
         if request_line.len() > MAX_REQUEST_LINE_LEN {
-            return Err(anyhow!("request line demasiado larga"));
+            return Err(RequestError::Malformed(
+                "request line demasiado larga".to_string(),
+            ));
         }
 
-        let (method, path, query, version) = Request::extract_request_line(request_line)?;
-        let headers = Request::extract_headers(lines)?;
+        let (method, path, query, version) = Self::extract_request_line(request_line)?;
+        let headers = Self::extract_headers(lines)?;
+
+        if is_chunked(&headers) {
+            return Err(RequestError::ChunkedNotSupported);
+        }
+
+        let expected_body_len = content_length(&headers)?;
+        if expected_body_len > MAX_BODY_SIZE {
+            return Err(RequestError::Malformed(
+                "body demasiado grande".to_string(),
+            ));
+        }
+
+        let body = if expected_body_len == 0 {
+            Vec::new()
+        } else if body_after_headers.len() < expected_body_len {
+            return Err(RequestError::IncompleteBody(
+                expected_body_len - body_after_headers.len(),
+            ));
+        } else {
+            body_after_headers[..expected_body_len].to_vec()
+        };
 
         Ok(Self {
             method,
@@ -70,6 +106,7 @@ impl Request {
             query: query.map(std::string::ToString::to_string),
             version: version.to_string(),
             headers,
+            body,
         })
     }
 
@@ -89,6 +126,11 @@ impl Request {
     #[allow(dead_code)]
     pub fn version(&self) -> &str {
         &self.version
+    }
+
+    #[allow(dead_code)]
+    pub fn body(&self) -> &[u8] {
+        &self.body
     }
 
     pub fn wants_keep_alive(&self) -> bool {
@@ -113,21 +155,31 @@ impl Request {
 
     fn extract_request_line(
         payload: &str,
-    ) -> Result<(Method, &str, Option<&str>, &str)> {
+    ) -> Result<(Method, &str, Option<&str>, &str), RequestError> {
         let mut parts = payload.split_whitespace();
-        let method_str = parts.next().ok_or_else(|| anyhow!("falta method"))?;
-        let target = parts.next().ok_or_else(|| anyhow!("falta path"))?;
-        let version = parts.next().ok_or_else(|| anyhow!("falta version"))?;
+        let method_str = parts
+            .next()
+            .ok_or_else(|| RequestError::Malformed("falta method".to_string()))?;
+        let target = parts
+            .next()
+            .ok_or_else(|| RequestError::Malformed("falta path".to_string()))?;
+        let version = parts
+            .next()
+            .ok_or_else(|| RequestError::Malformed("falta version".to_string()))?;
         if parts.next().is_some() {
-            return Err(anyhow!("línea de solicitud con demasiados elementos"));
+            return Err(RequestError::Malformed(
+                "línea de solicitud con demasiados elementos".to_string(),
+            ));
         }
 
         if version != "HTTP/1.0" && version != "HTTP/1.1" {
-            return Err(anyhow!("versión HTTP no soportada: {version}"));
+            return Err(RequestError::Malformed(format!(
+                "versión HTTP no soportada: {version}"
+            )));
         }
 
         if target != "*" && !target.starts_with('/') {
-            return Err(anyhow!("target inválido: {target}"));
+            return Err(RequestError::Malformed(format!("target inválido: {target}")));
         }
 
         let (path, query) = match target.split_once('?') {
@@ -141,7 +193,7 @@ impl Request {
 
     fn extract_headers<'a>(
         lines: impl Iterator<Item = &'a str>,
-    ) -> Result<HashMap<String, String>> {
+    ) -> Result<HashMap<String, String>, RequestError> {
         let mut headers = HashMap::new();
         let mut total_size = 0usize;
 
@@ -152,23 +204,25 @@ impl Request {
             }
 
             if headers.len() >= MAX_HEADERS_COUNT {
-                return Err(anyhow!("demasiados headers"));
+                return Err(RequestError::Malformed("demasiados headers".to_string()));
             }
 
             if line.len() > MAX_HEADER_LEN {
-                return Err(anyhow!("header demasiado largo"));
+                return Err(RequestError::Malformed("header demasiado largo".to_string()));
             }
 
             total_size = total_size
                 .checked_add(line.len())
-                .ok_or_else(|| anyhow!("headers exceden tamaño máximo"))?;
+                .ok_or_else(|| RequestError::Malformed("headers exceden tamaño máximo".to_string()))?;
             if total_size > MAX_HEADERS_SIZE {
-                return Err(anyhow!("headers exceden tamaño máximo"));
+                return Err(RequestError::Malformed(
+                    "headers exceden tamaño máximo".to_string(),
+                ));
             }
 
             let (key, value) = line
                 .split_once(':')
-                .ok_or_else(|| anyhow!("header inválido: {line}"))?;
+                .ok_or_else(|| RequestError::Malformed(format!("header inválido: {line}")))?;
             let key = key.trim().to_ascii_lowercase();
             let value = value.trim();
 
@@ -185,11 +239,28 @@ impl Request {
     }
 }
 
-fn split_head_body(payload: &[u8]) -> Result<(&[u8], &[u8])> {
+fn is_chunked(headers: &HashMap<String, String>) -> bool {
+    headers
+        .get("transfer-encoding")
+        .is_some_and(|value| value.to_ascii_lowercase().contains("chunked"))
+}
+
+fn content_length(headers: &HashMap<String, String>) -> Result<usize, RequestError> {
+    match headers.get("content-length") {
+        Some(value) => value
+            .parse::<usize>()
+            .map_err(|_| RequestError::Malformed("Content-Length inválido".to_string())),
+        None => Ok(0),
+    }
+}
+
+fn split_head_body(payload: &[u8]) -> Result<(&[u8], &[u8]), RequestError> {
     let separator = b"\r\n\r\n";
     match payload.windows(separator.len()).position(|w| w == separator) {
         Some(pos) => Ok((&payload[..pos], &payload[pos + separator.len()..])),
-        None => Err(anyhow!("fin de headers no encontrado")),
+        None => Err(RequestError::Malformed(
+            "fin de headers no encontrado".to_string(),
+        )),
     }
 }
 
@@ -303,6 +374,41 @@ mod tests {
         let request = Request::new(raw_request.as_bytes()).unwrap();
         assert_eq!(request.path(), "/");
         assert_eq!(request.headers["host"], "localhost");
+        assert!(request.body().is_empty());
+    }
+
+    #[test]
+    fn test_new_parses_content_length_body() {
+        let raw_request = "POST / HTTP/1.1\r\n\
+            Host: localhost\r\n\
+            Content-Length: 11\r\n\r\n\
+            hello world";
+        let request = Request::new(raw_request.as_bytes()).unwrap();
+        assert_eq!(request.method(), Method::Post);
+        assert_eq!(request.body(), b"hello world");
+    }
+
+    #[test]
+    fn test_new_rejects_incomplete_body() {
+        let raw_request = "POST / HTTP/1.1\r\n\
+            Host: localhost\r\n\
+            Content-Length: 100\r\n\r\n\
+            hello";
+        assert!(matches!(
+            Request::new(raw_request.as_bytes()).unwrap_err(),
+            RequestError::IncompleteBody(_)
+        ));
+    }
+
+    #[test]
+    fn test_new_rejects_chunked() {
+        let raw_request = "POST / HTTP/1.1\r\n\
+            Host: localhost\r\n\
+            Transfer-Encoding: chunked\r\n\r\n";
+        assert!(matches!(
+            Request::new(raw_request.as_bytes()).unwrap_err(),
+            RequestError::ChunkedNotSupported
+        ));
     }
 
     #[test]
